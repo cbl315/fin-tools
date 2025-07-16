@@ -18,6 +18,7 @@
    - Mac系统声音警报
    - 中文语音播报(支持多种语音)
    - 特殊地址交易特别警报
+   - Server酱微信推送告警(支持代理配置)
 
 4. **特殊监控**
    - 监控特定地址(如KK地址)的交易行为
@@ -47,6 +48,14 @@
     'address': '0xff7d6a96ae471bbcd7713af9cb1feeb16cf56b41'  # 代币合约地址
 }
 ```
+
+### Server酱配置(SERVERCHAN_CONFIG)
+```python
+{
+    'enabled': True,  # 启用Server酱告警
+    'sckey': '您的SCKEY',  # Server酱SCKEY
+    'title': 'BR流动性告警'  # 消息标题
+}
 
 ### Web3配置(WEB3_CONFIG)
 ```python
@@ -92,6 +101,8 @@ python3 br_auto.py
    - 确保网络连接稳定
    - 自动移除功能需要正确配置钱包信息
    - 生产环境使用建议配置代理
+   - Server酱需要配置正确的SCKEY
+   - 如遇IP限制可启用代理配置
 
 ## 维护建议
 1. 定期检查依赖库版本
