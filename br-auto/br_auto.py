@@ -19,9 +19,23 @@ import random
 import ssl
 import subprocess
 import yaml
+import requests
 from web3_utils import Web3Manager
+from alert_utils.sc_alert import send_serverchan_alert
+from alert_utils.sound_alert import play_alert_sound
+from alert_utils.voice_alert import play_voice_alert, get_available_voice
+from alert_utils.wechat_alert import send_wechat_work_alert, wechat_token_cache
+from alert_utils.console_logger import (
+    format_amount,
+    log_liquidity_alert,
+    log_auto_remove_alert,
+    log_kk_alert,
+    log_position_change,
+    log_market_status
+)
 
 # 加载配置文件
+global config
 with open('br-auto/config.yaml', 'r', encoding='utf-8') as f:
     config = yaml.safe_load(f)
 
@@ -32,6 +46,7 @@ PROXY_CONFIG = config['proxy_config']
 LARGE_SELL_ALERT_CONFIG = config['large_sell_alert_config']
 WALLET_NAMES = config['wallet_names']
 KK_ADDRESS = config['kk_address']
+WECHAT_WORK_CONFIG = config['wechat_work']
 
 # 全局变量
 liquidity_history = []  # 保留原有数组（用于现有报警逻辑）
@@ -49,123 +64,6 @@ last_auto_remove_time = 0  # 记录上次自动移除时间
 AUTO_REMOVE_COOLDOWN = 300  # 自动移除冷却时间（秒）
 voice_thread_active = False  # 防止语音重叠的标志
 current_positions = []  # 当前流动性头寸信息
-
-def play_alert_sound():
-    """播放警报音 - Mac版本"""
-    def _play():
-        for _ in range(5):
-            os.system('afplay /System/Library/Sounds/Glass.aiff')  # macOS 系统提示音
-            time.sleep(0.2)
-    sound_thread = threading.Thread(target=_play)
-    sound_thread.daemon = True
-    sound_thread.start()
-
-def get_available_voice():
-    """获取可用的中文语音"""
-    try:
-        # 检查是否为macOS系统
-        if os.name == 'posix' and os.uname().sysname == 'Darwin':
-            # 尝试获取可用的中文语音
-            result = subprocess.run(['say', '-v', '?'], capture_output=True, text=True, timeout=5)
-            voices = result.stdout.lower()
-            
-            # 按优先级检查可用的中文语音
-            chinese_voices = ['mei-jia', 'sin-ji', 'ting-ting', 'ya-ling']
-            for voice in chinese_voices:
-                if voice in voices:
-                    return voice
-            
-            # 如果没有中文语音，返回默认语音
-            return None
-        else:
-            # 非macOS系统，返回None
-            return None
-    except Exception:
-        return None
-
-def play_voice_alert(message):
-    """播放语音警报"""
-    global voice_thread_active
-    
-    # 如果有语音正在播放，跳过新的语音播放
-    if voice_thread_active:
-        print(f'【BR】🔊 语音播放中，跳过新语音: {message}')
-        return
-    
-    def _play_voice():
-        global voice_thread_active
-        try:
-            voice_thread_active = True
-            # 清理消息文本
-            clean_message = message.replace('"', '').replace("'", "")
-            print(f'【BR】🔊 准备播放语音: {clean_message}')
-            
-            # 检查系统和可用语音
-            if os.name == 'posix' and os.uname().sysname == 'Darwin':
-                # macOS系统
-                available_voice = get_available_voice()
-                
-                # 重复播放逻辑
-                for i in range(3):  # 播放3次语音
-                    try:
-                        if available_voice:
-                            # 使用可用的中文语音
-                            subprocess.run(['say', '-v', available_voice, clean_message], timeout=15)
-                        else:
-                            # 使用默认语音
-                            subprocess.run(['say', clean_message], timeout=15)
-                        print(f'【BR】语音播放第{i+1}次执行成功')
-                        time.sleep(0.3)  # 语音间隔
-                    except subprocess.TimeoutExpired:
-                        print(f'【BR】语音播放第{i+1}次超时')
-                    except Exception as inner_e:
-                        print(f'【BR】语音播放第{i+1}次内部错误: {inner_e}')
-            elif os.name == 'nt':
-                # Windows系统
-                try:
-                    import pyttsx3
-                    engine = pyttsx3.init()
-                    # 设置中文语音（如果可用）
-                    voices = engine.getProperty('voices')
-                    for voice in voices:
-                        if 'chinese' in voice.name.lower() or 'zh' in voice.id.lower():
-                            engine.setProperty('voice', voice.id)
-                            break
-                    
-                    for i in range(3):
-                        engine.say(clean_message)
-                        engine.runAndWait()
-                        print(f'【BR】语音播放第{i+1}次执行成功')
-                        time.sleep(0.3)
-                except ImportError:
-                    print('【BR】Windows系统需要安装pyttsx3库: pip install pyttsx3')
-                    # 使用系统提示音作为替代
-                    for i in range(3):
-                        os.system('echo \a')  # 系统提示音
-                        time.sleep(0.5)
-                except Exception as e:
-                    print(f'【BR】Windows语音播放错误: {e}')
-            else:
-                # 其他系统，只打印消息
-                print(f'【BR】🔊 语音消息: {clean_message}')
-                
-        except Exception as e:
-            print(f'【BR】语音播放错误: {e}')
-        finally:
-            voice_thread_active = False
-    
-    voice_thread = threading.Thread(target=_play_voice)
-    voice_thread.daemon = True
-    voice_thread.start()
-
-def format_amount(amount):
-    """将数量格式化为合适的单位（M、K等）"""
-    if amount >= 1000000:
-        return f"{amount/1000000:.2f}M"
-    elif amount >= 1000:
-        return f"{amount/1000:.2f}K"
-    else:
-        return f"{amount:.2f}"
 
 
 def auto_remove_positions():
@@ -347,26 +245,37 @@ def on_message(ws, message):
                         time_window_drop = max_liquidity_in_2min - current_liquidity
                         
                         if time_window_drop > auto_threshold:
-                            print(f'\033[93m【BR】🚨 2分钟内流动性减少超过自动移除阈值 {auto_threshold}M，触发自动保护！从 {max_liquidity_in_2min:.2f}M 降至 {current_liquidity:.2f}M\033[0m')
-                            # 在新线程中执行自动移除，避免阻塞WebSocket
-                            auto_remove_thread = threading.Thread(target=auto_remove_positions)
-                            auto_remove_thread.daemon = True
-                            auto_remove_thread.start()
-                            time_window_triggered = True
-                    
-                    # 传统检测逻辑（作为备用）
-                    if not time_window_triggered and BR_CONFIG['auto_remove_enabled'] and max_liquidity_drop > auto_threshold and current_positions:
-                        print(f'\033[93m【BR】🚨 流动性减少超过自动移除阈值 {auto_threshold}M，触发自动保护！从 {max_drop_from:.2f}M 降至 {current_liquidity:.2f}M\033[0m')
+                            log_auto_remove_alert(current_liquidity, max_liquidity_in_2min, auto_threshold)
                         # 在新线程中执行自动移除，避免阻塞WebSocket
                         auto_remove_thread = threading.Thread(target=auto_remove_positions)
                         auto_remove_thread.daemon = True
                         auto_remove_thread.start()
+                        time_window_triggered = True
+                        # 发送微信通知
+                        alert_msg = f"2分钟内流动性减少超过自动移除阈值 {auto_threshold}M\n从 {max_liquidity_in_2min:.2f}M 降至 {current_liquidity:.2f}M"
+                        send_wechat_work_alert(alert_msg, config=config)
+                        send_serverchan_alert(alert_msg, config=config)
+                    
+                    # 传统检测逻辑（作为备用）
+                    if not time_window_triggered and BR_CONFIG['auto_remove_enabled'] and max_liquidity_drop > auto_threshold and current_positions:
+                        log_auto_remove_alert(current_liquidity, max_drop_from, auto_threshold)
+                        # 在新线程中执行自动移除，避免阻塞WebSocket
+                        auto_remove_thread = threading.Thread(target=auto_remove_positions)
+                        auto_remove_thread.daemon = True
+                        auto_remove_thread.start()
+                        # 发送微信通知
+                        alert_msg = f"流动性减少超过自动移除阈值 {auto_threshold}M\n从 {max_drop_from:.2f}M 降至 {current_liquidity:.2f}M"
+                        send_wechat_work_alert(alert_msg, config=config)
+                        send_serverchan_alert(alert_msg, config=config)
                     
                     # 独立的警报检查（只有在未触发自动移除时才执行）
                     elif not time_window_triggered and max_liquidity_drop > threshold:
-                        warning_msg = f'\033[91m【BR】警告！流动性突然减少 {max_liquidity_drop:.2f}M！从 {max_drop_from:.2f}M 降至 {current_liquidity:.2f}M\033[0m'
-                        print(warning_msg)
+                        log_liquidity_alert(current_liquidity, max_drop_from, max_liquidity_drop, threshold)
                         play_alert_sound()
+                        # 发送微信通知
+                        alert_msg = f"流动性突然减少 {max_liquidity_drop:.2f}M\n从 {max_drop_from:.2f}M 降至 {current_liquidity:.2f}M"
+                        send_wechat_work_alert(alert_msg, config=config)
+                        send_serverchan_alert(alert_msg, config=config)
                 
                 # 显示当前状态
                 if token_amounts:
@@ -408,16 +317,24 @@ def on_message(ws, message):
                         # 检查是否是KK地址的操作
                         if wallet_address.lower() == KK_ADDRESS.lower():
                             if type_str == '1':
-                                print(f'\033[93m【BR】🚨 KK入场警报！新增流动性 - 价值: ${value:.2f}, 代币变化: {token_info_str}\033[0m')
-                                play_voice_alert("请注意，KK入场了，KK入场了")
+                                    log_kk_alert('enter', value, token_info_str)
+                                    play_voice_alert("请注意，KK入场了，KK入场了")
+                                    # 发送微信通知
+                                    alert_msg = f"KK入场警报！新增流动性\n价值: ${value:.2f}\n代币变化: {token_info_str}"
+                                    send_wechat_work_alert(alert_msg, config=config)
+                                    send_serverchan_alert(alert_msg, config=config)
                             elif type_str == '2':
-                                print(f'\033[95m【BR】🚨 KK跑路警报！减少流动性 - 价值: ${value:.2f}, 代币变化: {token_info_str}\033[0m')
-                                play_voice_alert("请注意，KK跑路了，KK跑路了")
+                                    log_kk_alert('exit', value, token_info_str)
+                                    play_voice_alert("请注意，KK跑路了，KK跑路了")
+                                    # 发送微信通知
+                                    alert_msg = f"KK跑路警报！减少流动性\n价值: ${value:.2f}\n代币变化: {token_info_str}"
+                                    send_wechat_work_alert(alert_msg, config=config)
+                                    send_serverchan_alert(alert_msg, config=config)
                         else:
                             if type_str == '1':
-                                print(f'\033[92m【BR】新增流动性 - 价值: ${value:.2f}, 代币变化: {token_info_str}{wallet_info}\033[0m')
+                                print(f'\033[92m【BR】新增流动性 - 价值: ${value:.2f}, 代币变化: {token_info_str}{wallet_info}\033[0m')  # 保持原样，非关键日志
                             elif type_str == '2':
-                                print(f'\033[91m【BR】减少流动性 - 价值: ${value:.2f}, 代币变化: {token_info_str}{wallet_info}\033[0m')
+                                print(f'\033[91m【BR】减少流动性 - 价值: ${value:.2f}, 代币变化: {token_info_str}{wallet_info}\033[0m')  # 保持原样，非关键日志
 
         # 处理交易历史数据
         if 'arg' in data and 'data' in data:
@@ -619,26 +536,17 @@ def start_heartbeat(ws):
                                 new_count = len(current_positions)
                                 
                                 if new_count > old_count:
-                                    print(f'【BR】🔄 检测到新头寸！头寸数量从 {old_count} 增加到 {new_count}')
-                                    if current_positions:
-                                        position_ids = [str(pos['token_id']) for pos in current_positions]
-                                        print(f'【BR】📋 当前头寸编号: {", ".join(position_ids)}')
+                                    log_position_change(old_count, new_count, [str(pos['token_id']) for pos in current_positions])
                                 elif new_count < old_count:
-                                    print(f'【BR】🔄 检测到头寸减少！头寸数量从 {old_count} 减少到 {new_count}')
-                                    if current_positions:
-                                        position_ids = [str(pos['token_id']) for pos in current_positions]
-                                        print(f'【BR】📋 当前头寸编号: {", ".join(position_ids)}')
+                                    log_position_change(old_count, new_count, [str(pos['token_id']) for pos in current_positions])
                             else:
                                 # 即使数量相同，也检查token_id是否有变化
                                 old_ids = set(pos['token_id'] for pos in current_positions)
                                 new_ids = set(pos['token_id'] for pos in new_positions)
                                 
                                 if old_ids != new_ids:
+                                    log_position_change(len(current_positions), len(new_positions), [str(pos['token_id']) for pos in new_positions])
                                     current_positions = new_positions
-                                    print(f'【BR】🔄 检测到头寸变化！头寸已更新')
-                                    if current_positions:
-                                        position_ids = [str(pos['token_id']) for pos in current_positions]
-                                        print(f'【BR】📋 当前头寸编号: {", ".join(position_ids)}')
                             
                             last_position_check = current_time
                         except Exception as e:
@@ -707,6 +615,9 @@ def main():
     global web3_instance
     
     try:
+        msg = f'【BR】🔔 BR流动性监控系统已启动'
+        send_wechat_work_alert(msg, config=config)
+        send_serverchan_alert(msg, config=config)
         print('【BR】🚀 启动BR流动性自动保护系统 - Mac版本...')
         print(f'【BR】监控代币地址: {BR_CONFIG["address"]}')
         print(f'【BR】流动性减少阈值: {BR_CONFIG["liquidity_threshold"]}M')
@@ -736,10 +647,6 @@ def main():
         
         # 初始化Web3Manager
         print('【BR】🔗 初始化Web3Manager...')
-        config = {
-            'web3_config': WEB3_CONFIG,
-            'proxy_config': PROXY_CONFIG
-        }
         web3_manager = Web3Manager(config)
         if web3_manager.connect():
             print('【BR】✅ Web3连接成功')
