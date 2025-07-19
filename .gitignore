@@ -174,3 +174,4 @@ cython_debug/
 .pypirc
 *config.yaml
 *TODO.md
+*br_auto_v0.py

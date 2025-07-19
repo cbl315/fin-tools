@@ -22,7 +22,7 @@ import requests
 from web3_utils import Web3Manager
 from alert_utils.sc_alert import send_serverchan_alert
 from alert_utils.sound_alert import play_alert_sound
-from alert_utils.voice_alert import play_voice_alert, get_available_voice
+from alert_utils.voice_alert import VoiceAlert
 from alert_utils.wechat_alert import send_wechat_work_alert, wechat_token_cache
 from alert_utils.console_logger import (
     format_amount,
@@ -78,6 +78,8 @@ class BRMonitor:
         self.last_auto_remove_time = 0
         self.voice_thread_active = False
         self.current_positions = []
+        # 语音播报类 用于告警时播报语音
+        self.voice_alert = VoiceAlert()
     
     def auto_remove_positions(self):
         """自动移除所有USDT-BR头寸"""
@@ -97,8 +99,8 @@ class BRMonitor:
         
         try:
             print("【BR】🚨 触发自动移除保护机制！")
-            play_voice_alert("警告！流动性大幅减少，正在自动移除头寸保护资金")
-            
+            self.voice_alert.play_voice_alert("警告！流动性大幅减少，正在自动移除头寸保护资金")
+
             if not self.web3_manager:
                 print("【BR】❌ Web3连接不可用，无法执行自动移除")
                 return
@@ -128,7 +130,7 @@ class BRMonitor:
             print(f"【BR】🎉 自动移除完成，成功移除 {success_count}/{len(positions)} 个头寸")
             if success_count > 0:
                 time.sleep(8)  # 等待语音播放完成
-                play_voice_alert(f"自动移除完成，成功保护了 {success_count} 个头寸")
+                self.voice_alert.play_voice_alert(f"自动移除完成，成功保护了 {success_count} 个头寸")
             
             # 更新当前头寸信息
             self.web3_manager.get_v3_positions()
@@ -268,13 +270,13 @@ class BRMonitor:
                                 
                                 if time_window_drop > auto_threshold:
                                     log_auto_remove_alert(current_liquidity, max_liquidity_in_2min, auto_threshold)
-                                auto_remove_thread = threading.Thread(target=self.auto_remove_positions)
-                                auto_remove_thread.daemon = True
-                                auto_remove_thread.start()
-                                time_window_triggered = True
-                                alert_msg = f"2分钟内流动性减少超过自动移除阈值 {auto_threshold}M\n从 {max_liquidity_in_2min:.2f}M 降至 {current_liquidity:.2f}M"
-                                send_wechat_work_alert(alert_msg, config=self.config)
-                                send_serverchan_alert(alert_msg, config=self.config)
+                                    auto_remove_thread = threading.Thread(target=self.auto_remove_positions)
+                                    auto_remove_thread.daemon = True
+                                    auto_remove_thread.start()
+                                    time_window_triggered = True
+                                    alert_msg = f"2分钟内流动性减少超过自动移除阈值 {auto_threshold}M\n从 {max_liquidity_in_2min:.2f}M 降至 {current_liquidity:.2f}M"
+                                    send_wechat_work_alert(alert_msg, config=self.config)
+                                    send_serverchan_alert(alert_msg, config=self.config)
                             
                             # 传统检测逻辑
                             if not time_window_triggered and self.BR_CONFIG['auto_remove_enabled'] and max_liquidity_drop > auto_threshold and self.current_positions:
@@ -333,13 +335,13 @@ class BRMonitor:
                             if wallet_address.lower() == self.KK_ADDRESS.lower():
                                 if type_str == '1':
                                     log_kk_alert('enter', value, token_info_str)
-                                    play_voice_alert("请注意，KK入场了，KK入场了")
+                                    self.voice_alert.play_voice_alert("请注意，KK入场了，KK入场了")
                                     alert_msg = f"KK入场警报！新增流动性\n价值: ${value:.2f}\n代币变化: {token_info_str}"
                                     send_wechat_work_alert(alert_msg, config=self.config)
                                     send_serverchan_alert(alert_msg, config=self.config)
                                 elif type_str == '2':
                                     log_kk_alert('exit', value, token_info_str)
-                                    play_voice_alert("请注意，KK跑路了，KK跑路了")
+                                    self.voice_alert.play_voice_alert("请注意，KK跑路了，KK跑路了")
                                     alert_msg = f"KK跑路警报！减少流动性\n价值: ${value:.2f}\n代币变化: {token_info_str}"
                                     send_wechat_work_alert(alert_msg, config=self.config)
                                     send_serverchan_alert(alert_msg, config=self.config)
@@ -386,7 +388,7 @@ class BRMonitor:
                                     
                                     if self.LARGE_SELL_ALERT_CONFIG['enabled'] and float(volume) >= self.LARGE_SELL_ALERT_CONFIG['threshold']:
                                         if wallet.lower() == self.KK_ADDRESS.lower():
-                                            play_voice_alert("警告！KK大额卖出，KK大额卖出")
+                                            self.voice_alert.play_voice_alert("警告！KK大额卖出，KK大额卖出")
                                             time.sleep(4)
                                             play_alert_sound()
                                         else:

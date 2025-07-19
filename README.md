@@ -68,6 +68,15 @@ python br-auto/br_auto.py
 4. Voice alerts are only available on macOS systems.
 5. Monitor the console output for important alerts and status updates.
 
+## Recent Changes
+
+### [2025-07-19 23:30:00]
+- 重构为面向对象设计 (v2.0)
+- 新增2分钟时间窗口流动性检测机制
+- 改进头寸缓存和自动移除逻辑
+- 增强WebSocket连接稳定性和错误处理
+- 集成Web3Manager进行链上操作
+
 ## Troubleshooting
 
 - If you get SSL errors, try:

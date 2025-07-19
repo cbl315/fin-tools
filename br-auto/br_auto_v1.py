@@ -246,15 +246,15 @@ def on_message(ws, message):
                         
                         if time_window_drop > auto_threshold:
                             log_auto_remove_alert(current_liquidity, max_liquidity_in_2min, auto_threshold)
-                        # 在新线程中执行自动移除，避免阻塞WebSocket
-                        auto_remove_thread = threading.Thread(target=auto_remove_positions)
-                        auto_remove_thread.daemon = True
-                        auto_remove_thread.start()
-                        time_window_triggered = True
-                        # 发送微信通知
-                        alert_msg = f"2分钟内流动性减少超过自动移除阈值 {auto_threshold}M\n从 {max_liquidity_in_2min:.2f}M 降至 {current_liquidity:.2f}M"
-                        send_wechat_work_alert(alert_msg, config=config)
-                        send_serverchan_alert(alert_msg, config=config)
+                            # 在新线程中执行自动移除，避免阻塞WebSocket
+                            auto_remove_thread = threading.Thread(target=auto_remove_positions)
+                            auto_remove_thread.daemon = True
+                            auto_remove_thread.start()
+                            time_window_triggered = True
+                            # 发送微信通知
+                            alert_msg = f"2分钟内流动性减少超过自动移除阈值 {auto_threshold}M\n从 {max_liquidity_in_2min:.2f}M 降至 {current_liquidity:.2f}M"
+                            send_wechat_work_alert(alert_msg, config=config)
+                            send_serverchan_alert(alert_msg, config=config)
                     
                     # 传统检测逻辑（作为备用）
                     if not time_window_triggered and BR_CONFIG['auto_remove_enabled'] and max_liquidity_drop > auto_threshold and current_positions:
