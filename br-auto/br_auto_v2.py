@@ -44,6 +44,8 @@ class BRMonitor:
         """初始化监控器"""
         self.load_config(config_path)
         self.init_state()
+        self.last_heartbeat_time = 0
+        self.heartbeat_interval = self.config.get('heartbeat_interval', 3600)  # 默认1小时
         
     def load_config(self, path):
         """加载配置文件"""
@@ -442,6 +444,25 @@ class BRMonitor:
             self.reconnect_count = 0
             self.reconnect_delay = 5
 
+    def send_heartbeat_message(self):
+        """发送探活消息到serverchan"""
+        try:
+            position_ids = [str(pos['token_id']) for pos in self.current_positions] if self.current_positions else []
+            position_info = f"当前头寸编号: {', '.join(position_ids)}" if position_ids else "无活跃头寸"
+            
+            liquidity_info = "N/A"
+            if self.top_pool_data and 'total_liquidity' in self.top_pool_data:
+                liquidity = self.top_pool_data['total_liquidity'] / 1000000
+                liquidity_info = f"{liquidity:.2f}M"
+            
+            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            message = f"【BR】系统运行正常\n时间: {current_time}\n{position_info}\n总流动性: {liquidity_info}"
+            
+            send_serverchan_alert(message, config=self.config)
+            print(f'【BR】探活消息已发送: {message}')
+        except Exception as e:
+            print(f'【BR】发送探活消息失败: {e}')
+
     def stop_heartbeat(self):
         """停止心跳线程"""
         self.heartbeat_running = False
@@ -460,6 +481,7 @@ class BRMonitor:
             max_consecutive_errors = 3
             last_position_check = 0
             position_check_interval = 300  # 5分钟检查一次头寸
+            last_heartbeat_time = time.time()
             
             while self.heartbeat_running:
                 try:
@@ -568,6 +590,12 @@ class BRMonitor:
                         if not self.heartbeat_running:
                             break
                         time.sleep(1)
+                        
+                        # 检查是否需要发送探活消息
+                        current_time = time.time()
+                        if current_time - last_heartbeat_time >= self.heartbeat_interval:
+                            self.send_heartbeat_message()
+                            last_heartbeat_time = current_time
                         
                 except Exception as e:
                     consecutive_errors += 1
@@ -679,6 +707,9 @@ class BRMonitor:
                 print('【BR】🔍 开始监控流动性变化...')
                 print('【BR】💡 当流动性减少超过阈值时，系统将自动移除头寸保护资金')
                 print('【BR】🔄 系统将每5分钟自动检查头寸变化，如需立即刷新请重启脚本')
+                
+                # 发送初始探活消息
+                self.send_heartbeat_message()
                 
                 # 保持主线程运行
                 while True:
