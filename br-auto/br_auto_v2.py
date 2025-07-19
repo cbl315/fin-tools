@@ -720,10 +720,19 @@ class BRMonitor:
         except KeyboardInterrupt:
             print('\n【BR】程序被用户终止')
             self.stop_heartbeat()
+            send_serverchan_alert("【BR】监控系统被用户手动终止", config=self.config)
         except Exception as e:
             print(f'【BR】程序异常: {e}')
             self.stop_heartbeat()
+            send_serverchan_alert(f"【BR】监控系统异常退出: {str(e)}", config=self.config)
+        finally:
+            # Handle normal exit case
+            send_serverchan_alert("【BR】监控系统已停止运行", config=self.config)
 
 if __name__ == "__main__":
-    monitor = BRMonitor('br-auto/config.yaml')
-    monitor.run()
+    try:
+        monitor = BRMonitor('br-auto/config.yaml')
+        monitor.run()
+    except Exception as e:
+        send_serverchan_alert(f"【BR】监控系统启动失败: {str(e)}", config=monitor.config if 'monitor' in locals() else None)
+        raise
